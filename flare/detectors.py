@@ -288,17 +288,25 @@ class EarlyWarningDetector:
 class OverflowForecaster:
     """Predict seconds-until-overflow from the recent occupancy trend.
 
-    A robust (least-squares) line is fit over a sliding window of recent
-    occupancy.  If the slope is positive, the projected crossing of capacity
-    gives an actionable ETA.
+    A least-squares line is fit over a sliding window of recent occupancy. To
+    avoid the wild, jittery extrapolations that a flat-but-noisy benign signal
+    would otherwise produce, a forecast is emitted *only* once the table is
+    genuinely, persistently filling -- i.e. the fitted slope is clearly positive
+    (``min_slope``) **and** the fit is a good one (``r2_min``) for several
+    consecutive windows (``confirm``).  The result is a clean ETA that appears
+    only when there is something to forecast and then converges on the truth.
     """
 
-    def __init__(self, capacity: int, window_s: int = 20, min_slope: float = 0.5):
+    def __init__(self, capacity: int, window_s: int = 20, min_slope: float = 3.0,
+                 r2_min: float = 0.7, confirm: int = 10):
         self.capacity = capacity
         self.window_s = window_s
         self.min_slope = min_slope
+        self.r2_min = r2_min
+        self.confirm = confirm
         self._t: List[float] = []
         self._occ: List[float] = []
+        self._streak = 0
         self.history: List[tuple] = []  # (t, eta, slope)
 
     def update(self, t: float, occupancy: float) -> Optional[float]:
@@ -308,16 +316,27 @@ class OverflowForecaster:
             self._t.pop(0)
             self._occ.pop(0)
         if len(self._t) < max(5, self.window_s // 2):
+            self.history.append((t, None, 0.0))
             return None
+
         ts = np.array(self._t)
         occ = np.array(self._occ)
         slope, intercept = np.polyfit(ts, occ, 1)
-        if slope <= self.min_slope:
+        # Goodness of fit: a flat, noisy benign window has a near-zero R^2,
+        # whereas a real fill is close to linear (R^2 -> 1).
+        fit = intercept + slope * ts
+        ss_res = float(np.sum((occ - fit) ** 2))
+        ss_tot = float(np.sum((occ - occ.mean()) ** 2)) + 1e-9
+        r2 = 1.0 - ss_res / ss_tot
+
+        sustained = slope >= self.min_slope and r2 >= self.r2_min
+        self._streak = self._streak + 1 if sustained else 0
+        if self._streak < self.confirm:
             self.history.append((t, None, slope))
             return None
+
         current = intercept + slope * t
-        eta = (self.capacity - current) / slope
-        eta = max(eta, 0.0)
+        eta = max((self.capacity - current) / slope, 0.0)
         self.history.append((t, eta, slope))
         return float(eta)
 
