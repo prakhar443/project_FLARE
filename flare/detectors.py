@@ -75,10 +75,15 @@ class _CUSUM:
     """
 
     def __init__(self, k_sigma: float = 1.0, h_sigma: float = 9.0,
-                 alpha: float = 0.02, warmup: int = 30):
+                 alpha: float = 0.02, warmup: int = 30,
+                 freeze_level: float = 0.5):
         self.stats = _EWMAStats(alpha=alpha, warmup=warmup)
         self.k_sigma = k_sigma
         self.h_sigma = h_sigma
+        # Stop updating the reference once accumulated drift reaches this
+        # fraction of the decision limit -- otherwise a slowly escalating
+        # attack teaches the CUSUM that its own growth rate is normal.
+        self.freeze_level = freeze_level
         self.s = 0.0
 
     def update(self, x: float, learn: bool = True) -> float:
@@ -87,13 +92,17 @@ class _CUSUM:
         std = max(np.sqrt(self.stats.var), 1e-6)
         k = self.k_sigma * std
         self.s = max(0.0, self.s + (x - mean - k))
-        if learn:
-            self.stats.update(x, learn=True)
         if not ready:
             self.s = 0.0  # do not accumulate drift during warm-up
+            self.stats.update(x, learn=True)
             return 0.0
         # Normalised drift: >=1 means the CUSUM limit has been crossed.
-        return self.s / (self.h_sigma * std)
+        drift = self.s / (self.h_sigma * std)
+        # Self-gated freeze-on-alarm: learn the reference only while the
+        # statistic itself shows no meaningful accumulation.
+        if learn and drift < self.freeze_level:
+            self.stats.update(x, learn=True)
+        return drift
 
 
 # Per-feature direction: +1 => high values are anomalous, -1 => low values are.

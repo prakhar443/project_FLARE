@@ -76,10 +76,10 @@ The vertical lines mark when each method first raises the alarm:
 | Method | First alarm | Warning before overflow |
 |--------|------------:|------------------------:|
 | FloRa-style baseline (prior art) | 336 s | **just 25 s** ⚠️ |
-| **FLARE — core detector** | 209 s | **152 s** ✅ |
+| **FLARE — core detector** | 208 s | **153 s** ✅ |
 | **FLARE — early-warning** | 210 s | **151 s** ✅ |
 
-FLARE sounds the alarm **~127 seconds earlier** than the baseline — during the
+FLARE sounds the alarm **~128 seconds earlier** than the baseline — during the
 attacker's probing phase, long before the table starts filling. The bottom panel
 shows FLARE's "anomaly score" staying calm under normal traffic and spiking past
 its threshold the moment probing begins.
