@@ -2,7 +2,10 @@
 
 ### Early Detection of Low-Rate Flow-Table Overflow (LOFT) Attacks in Software-Defined Networks
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/prakhar443/project_flare/blob/claude/affectionate-archimedes-rjk02/notebooks/FLARE_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/prakhar443/project_FLARE/blob/claude/affectionate-archimedes-rjk02/notebooks/FLARE_Colab.ipynb)
+
+▶️ **Run it now in Google Colab (no setup):**
+https://colab.research.google.com/github/prakhar443/project_FLARE/blob/claude/affectionate-archimedes-rjk02/notebooks/FLARE_Colab.ipynb
 
 FLARE is a defensive framework that detects stealthy **Low-Rate Flow-Table
 Overflow (LOFT)** attacks against SDN switches **earlier and more efficiently**
