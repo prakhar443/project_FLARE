@@ -42,12 +42,18 @@ FLARE adds four concrete capabilities:
 | Method | Detection time | Lead before overflow | Detects probing? |
 |--------|---------------:|---------------------:|:----------------:|
 | FloRa-style baseline | 336 s | **25 s** | ✗ |
-| **FLARE (core)** | 211 s | **150 s** | ✗ |
+| **FLARE (core)** | 209 s | **152 s** | ✗ |
 | **FLARE (early-warning)** | 210 s | **151 s** | ✓ |
 
-- Table overflows at **361 s**; FLARE warns **~125 s earlier** than the baseline.
+- Table overflows at **361 s**; FLARE warns **~127 s earlier** than the baseline.
 - **Time-to-overflow forecast error: ~14 s.**
 - **False-positive rate on attack-free traffic: 0%** for every detector.
+
+**Robustness (20 independent seeds, not cherry-picked):** FLARE detects the
+attack in **100%** of runs (core *and* early-warning), fires **earlier than the
+baseline in 100%** of runs, with a **median 150 s** lead before overflow (vs
+**30 s** for the baseline), a **median forecast error of 10 s**, and **0% false
+positives**. Reproduce with `python scripts/run_experiments.py`.
 
 ![detection timeline](figures/02_detection_timeline.png)
 ![mitigation](figures/04_mitigation.png)

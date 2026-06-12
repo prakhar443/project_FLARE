@@ -43,10 +43,16 @@ class RunResult:
             return None
         return self.overflow_t - self.flare_t
 
+    def flare_system_t(self) -> Optional[float]:
+        """FLARE's first alert from *any* component (early-warning or core)."""
+        ts = [x for x in (self.probe_t, self.flare_t) if x is not None]
+        return min(ts) if ts else None
+
     def lead_vs_baseline(self) -> Optional[float]:
-        if self.baseline_t is None or self.flare_t is None:
+        sys_t = self.flare_system_t()
+        if self.baseline_t is None or sys_t is None:
             return None
-        return self.baseline_t - self.flare_t
+        return self.baseline_t - sys_t
 
     def earliest_lead_vs_overflow(self) -> Optional[float]:
         """Lead using the *earliest* FLARE signal (probe or core)."""

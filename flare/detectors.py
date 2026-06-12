@@ -74,7 +74,7 @@ class _CUSUM:
     spread are learned online from benign traffic.
     """
 
-    def __init__(self, k_sigma: float = 1.0, h_sigma: float = 12.0,
+    def __init__(self, k_sigma: float = 1.0, h_sigma: float = 9.0,
                  alpha: float = 0.02, warmup: int = 30):
         self.stats = _EWMAStats(alpha=alpha, warmup=warmup)
         self.k_sigma = k_sigma
