@@ -26,7 +26,11 @@ def generate_dataset(
 ) -> pd.DataFrame:
     """Generate a labeled dataset across several randomized attack runs."""
     base = config or DEFAULT_CONFIG
-    attack_rates = attack_rates or [7.0, 9.0, 11.0]
+    # Vary the attack intensity around the configured rate (+/- ~20%) so the
+    # dataset spans a range of fill speeds, independent of the table scale.
+    if attack_rates is None:
+        r = base.attack_flow_rate
+        attack_rates = [0.8 * r, r, 1.2 * r]
     frames = []
     for i in range(n_runs):
         rate = attack_rates[i % len(attack_rates)]

@@ -23,8 +23,8 @@ the figures below — runs end-to-end in a free Google Colab notebook.
 ## The problem, in plain terms
 
 A modern network switch keeps a **flow table**: a list of rules telling it where
-to send traffic. That table lives in a small, expensive memory that only holds a
-few thousand entries.
+to send traffic. That table lives in a small, expensive memory that holds only a
+limited number of entries (around twelve thousand on the switch we model).
 
 A **Low-Rate Flow-Table Overflow (LOFT)** attack abuses this limit. Instead of
 flooding the network (which is easy to spot), the attacker quietly adds a trickle
@@ -62,7 +62,7 @@ capabilities:
 We simulate a realistic switch under normal traffic, then launch a stealthy LOFT
 attack. The attack has two stages: a quiet **probing phase** (yellow) starting at
 200 s, and the **attack phase** (red) starting at 240 s. With no defense, the
-table overflows at **361 s**.
+table overflows at **351 s**.
 
 ### 1. The attack is stealthy but deadly
 Traffic volume stays tiny the whole time, yet the table steadily fills until it
@@ -75,11 +75,11 @@ The vertical lines mark when each method first raises the alarm:
 
 | Method | First alarm | Warning before overflow |
 |--------|------------:|------------------------:|
-| FloRa-style baseline (prior art) | 336 s | **just 25 s** ⚠️ |
-| **FLARE — core detector** | 208 s | **153 s** ✅ |
-| **FLARE — early-warning** | 210 s | **151 s** ✅ |
+| FloRa-style baseline (prior art) | 324 s | **just 27 s** ⚠️ |
+| **FLARE — core detector** | 203 s | **148 s** ✅ |
+| **FLARE — early-warning** | 203 s | **148 s** ✅ |
 
-FLARE sounds the alarm **~128 seconds earlier** than the baseline — during the
+FLARE sounds the alarm **~121 seconds earlier** than the baseline — during the
 attacker's probing phase, long before the table starts filling. The bottom panel
 shows FLARE's "anomaly score" staying calm under normal traffic and spiking past
 its threshold the moment probing begins.
@@ -89,7 +89,7 @@ its threshold the moment probing begins.
 ### 3. FLARE predicts *when* the table will overflow
 Rather than a bare alarm, FLARE projects a **time-to-overflow**. The blue line is
 its prediction; the dashed line is the truth. The prediction locks onto the real
-overflow time (361 s) to within **~14 seconds** — a concrete deadline operators
+overflow time (351 s) to within **~2 seconds** — a concrete deadline operators
 can act on.
 
 ![time-to-overflow forecast](figures/03_forecast.png)
@@ -105,9 +105,9 @@ keeps the table comfortably below capacity instead of overflowing (red).
 Repeating the experiment across **20 independent random runs**, FLARE:
 - detects the attack in **100%** of runs,
 - fires **earlier than the baseline in 100%** of runs,
-- gives a **median 150 s** of warning before overflow (vs **30 s** for the
+- gives a **median 152 s** of warning before overflow (vs **30 s** for the
   baseline),
-- forecasts the overflow time with a **median error of 10 s**, and
+- forecasts the overflow time with a **median error of 2 s**, and
 - raises **zero false alarms** on attack-free traffic.
 
 Reproduce every number and figure with `python scripts/run_experiments.py`.

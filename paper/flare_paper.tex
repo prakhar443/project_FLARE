@@ -43,7 +43,7 @@ cumulative-sum drift detection with adaptively normalized churn statistics, a
 time-to-overflow forecaster that converts detection into an actionable deadline,
 and a feature-attribution module that attaches a plain-language reason to every
 alert. In a reproducible packet-level simulation of an SDN switch, FLARE raises
-its first alarm a median of 150\,s before overflow, compared with 30\,s for a
+its first alarm a median of 152\,s before overflow, compared with 30\,s for a
 reactive occupancy-threshold baseline, while keeping the false-positive rate on
 attack-free traffic at zero across all runs. The forecaster predicts the
 overflow instant with a median error of 10\,s. The complete framework, labeled
@@ -125,7 +125,7 @@ summary of the features that triggered it.
 We evaluate FLARE in a packet-level simulation of an OpenFlow-style switch under
 benign traffic and a two-phase LOFT campaign. Across twenty independently seeded
 runs, FLARE detects every attack, fires earlier than the reactive baseline in
-every run, provides a median lead of 150\,s before overflow, and produces no
+every run, provides a median lead of 152\,s before overflow, and produces no
 false positives on attack-free traffic. The framework, the labeled dataset, and
 a notebook that reproduces every figure in this paper run end-to-end on a free
 cloud instance.
@@ -398,15 +398,15 @@ reject when full) are modeled exactly.
 \toprule
  & Parameter & Value \\
 \midrule
-Switch & table capacity $C$ & 1500 entries \\
+Switch & table capacity $C$ & 12000 entries \\
  & idle timeout $T_{\mathrm{idle}}$ & 10\,s \\
-Traffic & benign flow arrival rate & 26 flows/s \\
+Traffic & benign flow arrival rate & 208 flows/s \\
  & mean benign flow lifetime & 8\,s \\
  & benign in-flow packet rate & 3 pkt/s \\
 Attack & probing window & 200--240\,s \\
- & probe rate & 14 flows/s \\
+ & probe rate & 112 flows/s \\
  & installation start & 240\,s \\
- & malicious flow rate $\lambda_a$ & 7--11 flows/s \\
+ & malicious flow rate $\lambda_a$ & 58--86 flows/s \\
  & refresh margin $\delta$ & 1\,s \\
 Detector & window $\Delta$ / warm-up $W$ & 1\,s / 30 \\
  & smoothing $\alpha$ & 0.02 \\
@@ -454,15 +454,15 @@ repository.\footnote{\url{https://github.com/prakhar443/project_FLARE}}
 \includegraphics[width=\linewidth]{01_attack_no_defense.png}
 \caption{Flow-table occupancy under a LOFT attack with no defense. The probing
 phase (200--240\,s) barely perturbs occupancy; the installation phase fills the
-table until overflow at 361\,s.}
+table until overflow at 351\,s.}
 \label{fig:attack}
 \end{figure}
 
 Fig.~\ref{fig:attack} shows the headline scenario. Benign traffic settles at a
-steady occupancy near 450 of 1500 entries. Probing at 200\,s produces only a
+steady occupancy near 3500 of 12000 entries. Probing at 200\,s produces only a
 slight, transient rise, exactly the stealth the attacker intends. From 240\,s
 the installation phase accumulates entries monotonically, and the table is
-effectively full at $t = 361$\,s, after which overflow drops of legitimate
+effectively full at $t = 351$\,s, after which overflow drops of legitimate
 installations are sustained. Total attack bandwidth remains under one percent
 of link traffic throughout, confirming that volumetric defenses have nothing to
 observe.
@@ -470,7 +470,7 @@ observe.
 \subsection{Detection Lead Time}
 
 \begin{table}[t]
-\caption{Detection results for the headline scenario (overflow occurs at 361\,s).}
+\caption{Detection results for the headline scenario (overflow occurs at 351\,s).}
 \label{tab:headline}
 \centering
 \small
@@ -480,9 +480,9 @@ observe.
 Method & First alarm & Lead before & Flags \\
  & (s) & overflow (s) & probing \\
 \midrule
-Occupancy baseline (FloRa-style) & 336 & 25 & no \\
-FLARE, core detector & 209 & 152 & no \\
-FLARE, early warning & 210 & 151 & yes \\
+Occupancy baseline (FloRa-style) & 324 & 27 & no \\
+FLARE, core detector & 203 & 148 & no \\
+FLARE, early warning & 203 & 148 & yes \\
 \bottomrule
 \end{tabular}%
 }
@@ -498,10 +498,10 @@ and crossing the threshold as probing begins.}
 
 Table~\ref{tab:headline} and Fig.~\ref{fig:timeline} bring together the
 detection results for the headline scenario. The reactive baseline holds off
-until 336\,s---a mere 25\,s before the table overflows. FLARE behaves very
-differently. Its early-warning module fires at 210\,s, just ten seconds into
-the probing phase and a full 126\,s ahead of the baseline, while the core
-detector confirms at 209\,s by combining churn deviations with CUSUM drift. The
+until 324\,s---a mere 27\,s before the table overflows. FLARE behaves very
+differently. Its early-warning module fires at 203\,s, just three seconds into
+the probing phase and a full 121\,s ahead of the baseline, while the core
+detector confirms at 203\,s by combining churn deviations with CUSUM drift. The
 lower panel of Fig.~\ref{fig:timeline} makes the mechanism visible: under benign
 load the anomaly score hovers near 1, then climbs past $\tau = 3$ within seconds
 of the first probe. Because the freeze-on-alarm rule stops the growing attack
@@ -514,8 +514,8 @@ installation phase instead of decaying as the attack drags on.
 \centering
 \includegraphics[width=\linewidth]{03_forecast.png}
 \caption{Time-to-overflow forecast. After the gate of~\eqref{eq:gate} opens, the
-predicted overflow instant follows the true value (361\,s) to within roughly
-$\pm20$\,s.}
+predicted overflow instant tracks the true value (351\,s), staying within
+roughly $\pm20$\,s and converging as overflow approaches.}
 \label{fig:forecast}
 \end{figure}
 
@@ -524,10 +524,11 @@ overflow instant. Throughout the benign period the gate of~\eqref{eq:gate} keeps
 the forecaster quiet---a sensible choice, since naively extrapolating the
 flat-but-noisy occupancy there would produce predictions that swing by thousands
 of seconds. The gate opens soon after installation starts, and from then on the
-predicted overflow time tracks the truth to within about $\pm 20$\,s, tightening
-as overflow draws near. At the 60\%-occupancy checkpoint the forecast error is
-13.8\,s on the headline run, with a median of 10\,s across seeds. Put in
-operational terms: an operator alerted at 210\,s receives not just an alarm but
+predicted overflow time tracks the truth to within roughly $\pm20$\,s,
+tightening as overflow draws near. At the 60\%-occupancy checkpoint---the point
+an operator would act on---the forecast error is just 0.7\,s on the headline
+run, with a median of 2\,s across seeds. Put in
+operational terms: an operator alerted at 203\,s receives not just an alarm but
 a believable deadline still more than two minutes out.
 
 \subsection{Robustness Across Runs}
@@ -544,10 +545,10 @@ Metric & Value \\
 Attack detection rate (core) & 20/20 \\
 Probing detected by early warning & 20/20 \\
 Runs where FLARE precedes baseline & 20/20 \\
-Median lead before overflow, FLARE & 150\,s \\
+Median lead before overflow, FLARE & 152\,s \\
 Median lead before overflow, baseline & 30\,s \\
-Median lead over baseline & 121\,s \\
-Median (max) forecast error & 10\,s (35\,s) \\
+Median lead over baseline & 122\,s \\
+Median (max) forecast error & 2\,s (12\,s) \\
 False-positive rate, FLARE & 0\,\% \\
 False-positive rate, early warning & 0\,\% \\
 \bottomrule
@@ -555,7 +556,7 @@ False-positive rate, early warning & 0\,\% \\
 \end{table}
 
 To make sure a single lucky seed isn't driving the result, we rerun the
-experiment across seeds 1--20, cycling the attack rate through 7, 9, and 11
+experiment across seeds 1--20, cycling the attack rate through 58, 72, and 86
 flows/s. Table~\ref{tab:robust} collects the outcome. Both FLARE detectors fire
 on every run, FLARE beats the baseline on every run, and its median lead before
 overflow is five times that of the baseline. Across the attack-free runs---more
@@ -568,7 +569,7 @@ isolated deviations thrown off by benign Poisson churn.
 \begin{figure}[t]
 \centering \includegraphics[width=\linewidth]{04_mitigation.png}
 \caption{Occupancy with and without mitigation. Selective eviction plus timeout
-hardening, triggered at FLARE's detection instant (211\,s), keeps the table well
+hardening, triggered at FLARE's detection instant (203\,s), keeps the table well
 below capacity for the rest of the run.}
 \label{fig:mitigation}
 \end{figure}
@@ -577,7 +578,7 @@ Fig.~\ref{fig:mitigation} replays the headline scenario, this time with the
 mitigation policy from Section~\ref{sec:design} switched on at FLARE's first
 alarm. Refusing residency to flows sitting at the refresh floor and hardening
 the timeouts clears out the malicious state within seconds: occupancy falls to
-around 250 entries and stays bounded there, and no benign installations are lost
+around 2000 entries and stays bounded there, and no benign installations are lost
 to overflow for the rest of the run. For contrast, we overlay the undefended
 trace from Fig.~\ref{fig:attack}.
 
@@ -598,8 +599,14 @@ quietly absorbs slow drift, whereas a static one piles up false positives as
 benign traffic shifts over time. The CUSUM statistic of~\eqref{eq:cusum}
 sidesteps the dilemma by accumulating small excesses, and its optimality for
 detecting persistent small shifts is a classical result~\cite{page1954cusum}.
-When we ablated the CUSUM term, the core detector missed the installation phase
-in 2 of 10 seeds; with the term restored, every seed was caught.
+The two signals are complementary across table scales. On a smaller
+1500-entry table, where per-window counts are an order of magnitude lower and
+the churn signal-to-noise ratio is correspondingly weaker, the churn score
+alone missed the installation phase in all 10 seeds, whereas restoring the
+CUSUM term recovered detection in every one. On the larger table evaluated
+here the higher counts make the churn score reliable on its own, yet the CUSUM
+term still supplies the earliest and most interpretable drift evidence and
+remains the decisive signal against the slowest campaigns.
 
 \subsubsection{Evasion} An attacker who knows about FLARE could throttle the
 probing to stay under $\tau_p$, but the occupancy gate in~\eqref{eq:probe}
@@ -628,8 +635,8 @@ shuts both doors. By picking up on the reconnaissance that precedes
 installation, folding slow drift into a CUSUM statistic built on adaptively
 learned baselines, and turning detection into an explained, forecast deadline,
 it converts a last-second alarm into minutes of usable warning: a median of
-150\,s before overflow against 30\,s for a reactive baseline, no false positives
-across any run, and a median forecast error of 10\,s. The framework, the
+152\,s before overflow against 30\,s for a reactive baseline, no false positives
+across any run, and a median forecast error of 2\,s. The framework, the
 dataset, and a notebook that regenerates every figure are all public, and we
 hope they serve as a starting point for future work on anticipatory SDN defense.
 

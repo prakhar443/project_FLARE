@@ -40,7 +40,7 @@ for f in ["01_attack_no_defense.png", "02_detection_timeline.png",
 **Important:** make sure your Colab cloned the **latest commit** before
 exporting (Runtime → Disconnect and delete runtime, then re-run all), otherwise
 figure C3 will show the old, noisy forecast. The clean version shows a single
-curve hugging the 361 s line.
+curve hugging the 351 s line.
 
 *Tip for print quality:* before exporting you can bump matplotlib DPI in a cell:
 `import matplotlib as mpl; mpl.rcParams['figure.dpi'] = 200` — or just use the
@@ -106,8 +106,8 @@ the exact spec.
 5. **Page budget**: the paper is written to land at ~8 pages in IEEEtran
    two-column format including references. If it runs long after figures go
    in, the Discussion subsections are the safest place to trim.
-6. **Numbers**: all results quoted in the paper (361 s overflow, 209/210 s
-   FLARE alarms, 336 s baseline, 150 s vs 30 s median leads, 10 s median
+6. **Numbers**: all results quoted in the paper (351 s overflow, 203 s
+   FLARE alarms, 324 s baseline, 152 s vs 30 s median leads, 2 s median
    forecast error, 0 % FPR over 20 seeds) come from the current code at this
    commit — if you change detector parameters, re-run
    `python scripts/run_experiments.py` and the 20-seed sweep and update

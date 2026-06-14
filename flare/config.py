@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, asdict
 @dataclass
 class SimConfig:
     # ----- Switch / flow-table model -------------------------------------
-    capacity: int = 1500          # max flow-table entries (small, expensive TCAM)
+    capacity: int = 12000         # max flow-table entries (TCAM-backed table)
     idle_timeout: float = 10.0    # entry evicted after this many seconds of no match
 
     # ----- Simulation clock ----------------------------------------------
@@ -23,7 +23,9 @@ class SimConfig:
     seed: int = 7
 
     # ----- Benign traffic -------------------------------------------------
-    benign_flow_rate: float = 26.0   # new benign flows per second (Poisson)
+    # Flow rates are scaled to the larger table so that steady-state benign
+    # occupancy sits at a realistic ~30% of capacity, as on a busy switch.
+    benign_flow_rate: float = 208.0  # new benign flows per second (Poisson)
     benign_mean_duration: float = 8.0  # mean benign flow lifetime (exponential)
     benign_pps: float = 3.0          # packets/sec inside an active benign flow
     benign_short_frac: float = 0.12  # fraction of benign flows that are 1-2 pkt blips
@@ -32,10 +34,10 @@ class SimConfig:
     attack_enabled: bool = True
     probe_start: float = 200.0    # attacker's quiet reconnaissance begins
     probe_duration: float = 40.0  # length of the probing phase
-    probe_rate: float = 14.0      # probe flows per second (short-lived, low volume)
+    probe_rate: float = 112.0     # probe flows per second (short-lived, low volume)
 
     attack_start: float = 240.0   # malicious low-rate flow installation begins
-    attack_flow_rate: float = 9.0  # new malicious flows per second
+    attack_flow_rate: float = 72.0  # new malicious flows per second
     # each malicious flow is refreshed just before idle_timeout so its entry
     # never expires -- the essence of a "low-rate" overflow attack.
     attack_refresh_margin: float = 1.0

@@ -180,6 +180,7 @@ class FlareDetector:
         self.stats = {f: _EWMAStats(alpha=alpha, warmup=warmup) for f in self.features}
         self.cusum = _CUSUM(alpha=alpha, warmup=warmup)
         self.score_threshold = score_threshold
+        self.score_cap = 4.0 * score_threshold  # display saturation only
         self.persistence = persistence
         self.window_n = window_n
         self.warmup = warmup
@@ -210,8 +211,13 @@ class FlareDetector:
                                   learn=not anomalous_now)
         drifting = drift >= 1.0
 
-        # Combined score (for plotting): churn anomaly OR drift, on one scale.
-        score = max(z_score, drift * self.score_threshold)
+        # Combined score: churn anomaly OR drift, on one scale.  The CUSUM
+        # drift can grow without bound under a strong, sustained fill, so the
+        # reported score is saturated at a small multiple of the threshold --
+        # the detection decision below uses the uncapped signals, this cap only
+        # keeps the score interpretable and plottable across table scales.
+        raw_score = max(z_score, drift * self.score_threshold)
+        score = min(raw_score, self.score_cap)
         self.scores.append(score)
         z_with_drift = dict(z)
         z_with_drift[FLARE_DRIFT_FEATURE] = drift * self.score_threshold
@@ -306,11 +312,16 @@ class OverflowForecaster:
     only when there is something to forecast and then converges on the truth.
     """
 
-    def __init__(self, capacity: int, window_s: int = 20, min_slope: float = 3.0,
+    def __init__(self, capacity: int, window_s: int = 20, min_slope: float = None,
                  r2_min: float = 0.7, confirm: int = 10):
         self.capacity = capacity
         self.window_s = window_s
-        self.min_slope = min_slope
+        # The minimum "this is really filling" slope scales with the table:
+        # benign occupancy noise grows with capacity, so a fixed entries/s
+        # threshold would either be too loose on a large table or too strict on
+        # a small one.  0.2% of capacity per second matches both regimes
+        # (3 entries/s at C=1500, 24 entries/s at C=12000).
+        self.min_slope = (0.002 * capacity) if min_slope is None else min_slope
         self.r2_min = r2_min
         self.confirm = confirm
         self._t: List[float] = []
