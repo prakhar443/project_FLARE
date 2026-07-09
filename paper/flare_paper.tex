@@ -1,0 +1,647 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[font=small]{caption}
+
+\newcommand{\figplaceholder}[2]{%
+  \fbox{\parbox[c][#2][c]{0.95\linewidth}{\centering\small\texttt{#1}\\[2pt]
+  \footnotesize (placeholder -- see FIGURES\_GUIDE.md)}}}
+
+\begin{document}
+
+\title{FLARE: Early, Adaptive, and Explainable Detection of Low-Rate
+Flow-Table Overflow Attacks in Software-Defined Networks}
+
+\author{\IEEEauthorblockN{Author}
+\IEEEauthorblockA{Department of CSE\\
+NIT Delhi, New Delhi, India\\
+abc@gmail.com}
+% TODO: add co-authors / supervisor here in additional \IEEEauthorblockN blocks
+}
+
+\maketitle
+
+\begin{abstract}
+Software-defined networking concentrates forwarding state in the flow tables of
+switches, which are backed by small and expensive ternary content-addressable
+memories that hold only a few thousand entries. A low-rate flow-table overflow
+(LOFT) attack exploits this constraint by installing long-lived malicious rules
+at a trickle, keeping each rule alive with minimal traffic until legitimate
+flows can no longer be served. Existing defenses are reactive and raise an alarm
+only after the table has begun to fill, leaving operators very little time to
+respond. This paper presents FLARE, a streaming defense framework that detects
+LOFT attacks substantially earlier. FLARE combines four mechanisms: an
+early-warning detector that recognizes the attacker's reconnaissance (probing)
+phase before any table growth occurs, an online core detector that couples
+cumulative-sum drift detection with adaptively normalized churn statistics, a
+time-to-overflow forecaster that converts detection into an actionable deadline,
+and a feature-attribution module that attaches a plain-language reason to every
+alert. In a reproducible packet-level simulation of an SDN switch, FLARE raises
+its first alarm a median of 152\,s before overflow, compared with 30\,s for a
+reactive occupancy-threshold baseline, while keeping the false-positive rate on
+attack-free traffic at zero across all runs. The forecaster predicts the
+overflow instant with a median error of 10\,s. The complete framework, labeled
+dataset, and a one-click notebook that reproduces every result are publicly
+available.
+\end{abstract}
+
+\begin{IEEEkeywords}
+software-defined networking, flow table overflow, low-rate attacks, anomaly
+detection, CUSUM, online learning, explainable security
+\end{IEEEkeywords}
+
+%==============================================================================
+\section{Introduction}
+%==============================================================================
+Software-defined networking (SDN) separates the control plane from the data
+plane and gives operators centralized, programmable control over their
+infrastructure~\cite{mckeown2008openflow}. The architecture has been widely
+adopted in data centers, campus networks, and wide-area backbones, and its
+security properties have consequently attracted sustained
+attention~\cite{kreutz2015sdn}. Forwarding decisions in an SDN switch are
+resolved against a flow table whose entries are typically stored in ternary
+content-addressable memory (TCAM). TCAM is fast but power-hungry and expensive,
+so commodity switches ship with tables that hold on the order of a few thousand
+entries~\cite{curtis2011devoflow}. This small, shared resource is a natural
+target.
+
+Early work demonstrated that an adversary who can trigger rule installations is
+able to exhaust the flow table and degrade or disable
+forwarding~\cite{shin2013attacking}. Flooding-style exhaustion is noisy,
+however, and is caught by conventional volume-based defenses. The more dangerous
+variant is the \emph{low-rate} flow-table overflow (LOFT) attack, in which the
+adversary installs rules at a trickle and refreshes each one just before its
+idle timeout so that it never expires~\cite{cao2017loft}. The aggregate attack
+traffic remains negligible, the per-flow behavior superficially resembles a
+quiet legitimate flow, and the table fills over minutes rather than seconds.
+Prior measurements show that the parameters an attacker needs, such as the idle
+timeout and the approximate table capacity, can be inferred remotely through
+careful timing probes~\cite{leng2015inference}.
+
+Detection work has so far concentrated on the consequences of the attack rather
+than its onset. The most recent representative of this line, FloRa, monitors
+table state and flags the overflow process once it is under
+way~\cite{flora2024}. Reactive detection of this kind is useful but
+structurally late: by the time occupancy is abnormal, the attacker has already
+spent its budget and the operator inherits a table full of malicious state. In
+our experiments, an occupancy-threshold detector representative of this approach
+fires a median of only 30\,s before the table is effectively full.
+
+We argue that a LOFT campaign is observable much earlier. The attack has a
+characteristic life cycle: a quiet \emph{probing} phase in which the adversary
+measures timeouts and capacity, followed by an \emph{installation} phase in
+which low-rate flows accumulate. Both phases perturb flow-level churn statistics
+long before they move the occupancy needle. Acting on these signals requires a
+detector that adapts to non-stationary benign traffic without being poisoned by
+the attack itself, and that communicates risk in terms an operator can act on.
+
+This paper presents FLARE (FLow-table Anomaly Recognition Engine), a streaming
+defense framework built around four ideas.
+
+\begin{itemize}
+\item[(i)] \textbf{Early warning.} A dedicated detector recognizes the probing phase
+from a sustained excess of short-lived, single-packet flows while occupancy is
+still flat, raising a flag before any damage begins.
+
+\item[(ii)] \textbf{Online adaptation.} All baselines are learned with exponentially
+weighted statistics that track benign drift continuously; learning is frozen
+while an anomaly is in progress so the attack cannot drag the baseline along
+with it.
+
+\item[(iii)] \textbf{Risk forecasting.} A gated trend estimator projects the current
+fill rate to a concrete time-to-overflow, replacing a binary alarm with a
+deadline.
+
+\item[(iv)] \textbf{Explainability.} Every alert carries a ranked, human-readable
+summary of the features that triggered it.
+\end{itemize}
+
+We evaluate FLARE in a packet-level simulation of an OpenFlow-style switch under
+benign traffic and a two-phase LOFT campaign. Across twenty independently seeded
+runs, FLARE detects every attack, fires earlier than the reactive baseline in
+every run, provides a median lead of 152\,s before overflow, and produces no
+false positives on attack-free traffic. The framework, the labeled dataset, and
+a notebook that reproduces every figure in this paper run end-to-end on a free
+cloud instance.
+
+The remainder of the paper is organized as follows.
+Section~\ref{sec:related} reviews related work.
+Section~\ref{sec:threat} defines the threat model.
+Section~\ref{sec:design} presents the design of FLARE.
+Section~\ref{sec:setup} describes the experimental setup, and
+Section~\ref{sec:results} reports results.
+Section~\ref{sec:discussion} discusses limitations, and
+Section~\ref{sec:conclusion} concludes.
+
+%==============================================================================
+\section{Related Work}\label{sec:related}
+%==============================================================================
+\subsection{Flow-Table Exhaustion Attacks}
+The feasibility of attacking SDN through its own control machinery was
+established shortly after OpenFlow's introduction~\cite{shin2013attacking}.
+Kandoi and Antikainen quantified how table-miss handling and rule installation
+create denial-of-service opportunities in OpenFlow
+deployments~\cite{kandoi2015dos}. Cao et al.\ then showed that overflow does not
+require a flood: by inferring the idle timeout and refreshing rules just before
+expiry, an attacker fills the table while remaining inconspicuous at every
+vantage point that measures volume~\cite{cao2017loft}. Complementary work
+demonstrated that the table parameters needed to mount such an attack can be
+inferred remotely~\cite{leng2015inference}. Related control-plane reflection
+attacks similarly weaponize the switch's limited resources at low
+rates~\cite{zhang2018reflection}.
+
+\subsection{Defenses}
+A first family of defenses targets flooding-style saturation.
+Avant-Guard introduced connection migration in the data plane to shield the
+control channel from SYN-flood-driven rule churn~\cite{shin2013avantguard}.
+FloodGuard combined proactive rule pre-installation with packet-in rate
+limiting~\cite{wang2015floodguard}, and FloodDefender added table-miss
+engineering and packet filtering across neighboring
+switches~\cite{shang2017flooddefender}. SLICOTS targets TCP-specific flooding
+through lightweight connection tracking~\cite{mohammadi2017slicots}. These
+systems assume a noisy attacker and are largely blind to low-rate campaigns.
+
+A second family manages the table itself. DevoFlow reduces TCAM pressure by
+devolving short flows to the data plane~\cite{curtis2011devoflow}. Yuan et al.\
+proposed peer support, offloading entries from an overloaded switch to its
+neighbors~\cite{yuan2019peer}. Such mechanisms raise the cost of an overflow but
+do not detect one. Statistical detection of anomalous flow patterns in SDN dates
+back to self-organizing-map classifiers over flow features~\cite{braga2010som}.
+The closest work to ours is FloRa, which detects low-rate overflow by monitoring
+table dynamics, but it reacts only once occupancy is already
+abnormal~\cite{flora2024}. None of these systems attempts to detect the
+reconnaissance that precedes installation, to forecast the time remaining before
+overflow, or to explain its decisions.
+
+\subsection{Change Detection and Explainability}
+FLARE's core builds on the cumulative-sum (CUSUM) procedure, which is optimal in
+a minimax sense for detecting small persistent shifts in a monitored
+statistic~\cite{page1954cusum}. The general theory of sequential change
+detection is covered by Basseville and
+Nikiforov~\cite{basseville1993detection}. Our preference for simple, adaptive
+statistics over heavyweight learned models follows the well-known critique of
+anomaly-detection deployments in operational networks~\cite{sommer2010outside}.
+The explainability module adopts the additive feature-attribution view
+popularized by SHAP, in the lightweight form appropriate for a streaming
+detector~\cite{lundberg2017shap}.
+
+%==============================================================================
+\section{Threat Model}\label{sec:threat}
+%==============================================================================
+We consider a single OpenFlow-style switch with a flow table of capacity $C$
+entries and an idle timeout of $T_{\mathrm{idle}}$ seconds, managed reactively:
+a table miss triggers rule installation for the new flow, and an entry is
+evicted $T_{\mathrm{idle}}$ seconds after its last matching packet. Once the table reaches capacity, the switch can no longer install new entries: the corresponding packets are either discarded or redirected to the controller. In both cases the outcome is the same—legitimate flows stop being forwarded. We model the adversary as one external host, or a small group of them, with the ability to push packets through the switch and to construct packet headers at will. The adversary has no access to the controller and cannot tamper with the
+switch firmware, nor does it know $C$ or $T_{\mathrm{idle}}$ beforehand. As in
+prior work~\cite{cao2017loft}, the attack unfolds across two phases.
+
+\subsubsection{Probing phase} In this stage the attacker injects short-lived
+flows---often just one packet apiece---and observes how quickly the switch
+responds, using that timing to estimate $T_{\mathrm{idle}}$ and gauge how
+loaded the table is~\cite{leng2015inference}. Because each probe holds an
+entry for only a moment, the table's occupancy stays effectively unchanged.
+
+\subsubsection{Installation phase} The attacker opens new flows at a low rate
+$\lambda_a$ and refreshes each one with a single packet every
+$T_{\mathrm{idle}} - \delta$ seconds, for a small safety margin $\delta$, so
+that no malicious entry ever expires. The per-flow packet rate is roughly
+$1/(T_{\mathrm{idle}}-\delta)$ packets per second, far below any volumetric
+alarm threshold, yet entries accumulate monotonically until the table is full.
+
+The defender observes only aggregate, per-window statistics of the switch
+(occupancy, miss and installation counts, expiry counts, and packet counts) and
+must operate online with bounded memory. We explicitly allow benign traffic to
+be non-stationary.
+
+%==============================================================================
+\section{The FLARE Framework}\label{sec:design}
+%==============================================================================
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{fig_architecture.jpg}
+\caption{FLARE architecture. Per-window features extracted from the switch feed
+four streaming modules: the early-warning detector, the core detector, the
+time-to-overflow forecaster, and the explainer; confirmed detections drive the
+mitigation policy.}
+\label{fig:arch}
+\end{figure}
+
+Fig.~\ref{fig:arch} shows the architecture. Time is divided into windows of
+$\Delta$ seconds (we use $\Delta = 1$\,s). At the end of window $t$ the switch
+state is summarized as a feature vector, and each module consumes the vector in
+a single pass, so the whole stack runs in constant memory and $O(|\mathcal{F}|)$
+time per window.
+
+\subsection{Feature Model}
+Let $o_t$ denote table occupancy at the end of window $t$, and let $m_t$, $i_t$,
+$e_t$, $s_t$, and $p_t$ denote the table-miss, installation, expiry,
+short-lived-expiry, and packet counts within the window. From these we derive
+the feature set $\mathcal{F}$: the occupancy ratio $o_t / C$; the smoothed
+occupancy growth $g_t$, an exponentially weighted average of
+$(o_t - o_{t-1})/\Delta$; the miss, installation, expiry, and short-lived rates;
+the net accumulation $(i_t - e_t)/\Delta$; and the mean traffic intensity per
+installed flow, $p_t / o_t$. The last feature is central to this threat: LOFT
+flows occupy an entry indefinitely while contributing almost no packets, so a
+falling per-flow intensity alongside rising occupancy is a strong attack
+signature.
+
+\subsection{Online Baselines with Freeze-on-Alarm}
+Every monitored feature $f$ maintains an exponentially weighted mean and
+variance,
+\begin{align}
+\mu_t^{(f)} &= \mu_{t-1}^{(f)} + \alpha\,\bigl(x_t^{(f)} - \mu_{t-1}^{(f)}\bigr),
+\label{eq:ewma-mean}\\
+\bigl(\sigma_t^{(f)}\bigr)^2 &= (1-\alpha)\Bigl[\bigl(\sigma_{t-1}^{(f)}\bigr)^2
+ + \alpha\,\bigl(x_t^{(f)} - \mu_{t-1}^{(f)}\bigr)^2\Bigr],
+\label{eq:ewma-var}
+\end{align}
+with smoothing factor $\alpha \in (0,1)$ (we use $\alpha = 0.02$, an effective
+memory of roughly $100$ windows). The first $W$ windows are treated as a warm-up
+during which moments are estimated incrementally and no alarms are raised.
+
+Adaptation creates a poisoning risk: a slowly escalating attack could teach the
+baseline that its own behavior is normal. FLARE therefore applies
+\emph{freeze-on-alarm}: updates~\eqref{eq:ewma-mean}--\eqref{eq:ewma-var} are
+suspended for any window the detector currently scores as anomalous, and resume
+when the score returns below threshold. The baseline thus tracks benign drift
+at all other times while remaining anchored during suspicious episodes.
+
+\subsection{Core Detector}
+The core detector fuses two complementary signals.
+
+\subsubsection{Directional churn score}
+For each churn feature $f$ the standardized deviation is
+\begin{equation}
+z_t^{(f)} = \frac{x_t^{(f)} - \mu_{t-1}^{(f)}}{\sigma_{t-1}^{(f)}},
+\label{eq:zscore}
+\end{equation}
+clipped to the direction in which an attack moves it:
+$\tilde z_t^{(f)} = \max\bigl(d_f\, z_t^{(f)},\, 0\bigr)$, where
+$d_f \in \{+1, -1\}$ is $+1$ for miss, installation, expiry, and short-lived
+rates and $-1$ for per-flow traffic intensity. The window's churn score is the
+root-mean-square aggregate
+\begin{equation}
+A_t = \Bigl(\tfrac{1}{|\mathcal{F}_c|}
+      \textstyle\sum_{f \in \mathcal{F}_c} \bigl(\tilde z_t^{(f)}\bigr)^2
+      \Bigr)^{1/2},
+\label{eq:rms}
+\end{equation}
+which rewards coherent multi-feature deviations over isolated spikes.
+
+\subsubsection{CUSUM drift on table growth}
+The defining behavior of a LOFT attack, slow persistent accumulation, is poorly
+served by per-window scores: an adaptive baseline simply learns the new growth
+rate. We instead monitor the smoothed growth $g_t$ with a one-sided CUSUM
+statistic~\cite{page1954cusum},
+\begin{equation}
+S_t = \max\bigl(0,\; S_{t-1} + g_t - \mu_{t-1}^{(g)} - k\,\sigma_{t-1}^{(g)}\bigr),
+\label{eq:cusum}
+\end{equation}
+where $k$ is the reference slack (we use $k = 1$). The normalized drift
+indicator is $D_t = S_t / (h\,\sigma_{t-1}^{(g)})$ with decision limit $h$ (we
+use $h = 9$), so $D_t \ge 1$ signals that small positive growth excesses have
+persisted long enough to matter. The CUSUM reference statistics are also subject
+to freeze-on-alarm.
+
+\subsubsection{Decision rule}
+Window $t$ is marked anomalous if $A_t \ge \tau$ or $D_t \ge 1$, with
+$\tau = 3$. A single noisy window shouldn't set off an alarm. To avoid that, we apply a
+$k$-of-$n$ persistence rule and only flag an anomaly once at least $\kappa$ of
+the last $n$ windows look abnormal---in practice we set $\kappa = 3$ and
+$n = 5$. For the score itself we take $\max(A_t,\, \tau D_t)$, which lets us
+compare the two signals on the same scale.
+
+\subsection{Early-Warning Detector}
+What gives probing away is a steady stream of short-lived flows and table
+misses that persists \emph{while occupancy stays low}. That combination sets it
+apart both from ordinary traffic bursts and from the later installation phase.
+To catch it, the early-warning module watches the short-lived rate and the miss
+rate, each against its own baseline of the
+form~\eqref{eq:ewma-mean}--\eqref{eq:ewma-var}, and raises a flag on window $t$
+when
+\begin{equation}
+\max_{f \in \{s, m\}} \tilde z_t^{(f)} \ge \tau_p
+\quad\text{and}\quad
+o_t / C < \theta,
+\label{eq:probe}
+\end{equation}
+using $\tau_p = 2.8$ and an occupancy gate of $\theta = 0.6$; the same
+$k$-of-$n$ persistence rule still applies. That occupancy gate is precisely
+what makes the module an early warning. Once the table is visibly filling, the
+detector steps back on purpose and leaves that regime to the core detector,
+which keeps the two alarms cleanly separated in meaning.
+
+\subsection{Time-to-Overflow Forecaster}
+Knowing \emph{whether} something is wrong is only half of what operators need;
+they also want to know \emph{how long they have}. To answer that, FLARE looks
+at the last $W_r$ occupancy samples (we use $W_r = 20$), fits an ordinary
+least-squares line $\hat o(t) = \hat\beta t + \hat\gamma$ across that sliding
+window, and records the coefficient of determination $R^2$. It publishes a
+forecast only when the fill is genuinely sustained---that is, when
+\begin{equation}
+\hat\beta \ge \beta_{\min}
+\;\wedge\;
+R^2 \ge \rho_{\min}
+\label{eq:gate}
+\end{equation}
+holds for $m$ consecutive windows (here $\beta_{\min} = 3$ entries/s,
+$\rho_{\min} = 0.7$, and $m = 10$). The gate earns its keep in practice: benign
+occupancy sits flat but jittery, so an ungated extrapolation swings wildly,
+whereas a real fill traces a near-linear path and clears the gate right away.
+Once it does, the estimated time to overflow is
+\begin{equation}
+\widehat{\mathrm{ETA}}_t = \max\!\left(\frac{C - \hat o(t)}{\hat\beta},\, 0\right).
+\label{eq:eta}
+\end{equation}
+
+\subsection{Explainability}
+Each alert is annotated with the features responsible for it. The per-feature
+deviations $\tilde z_t^{(f)}$ (and the scaled drift $\tau D_t$) computed
+in~\eqref{eq:rms} already constitute an additive decomposition of the score, in
+the spirit of feature-attribution methods~\cite{lundberg2017shap}. FLARE ranks
+them, keeps the top two, and renders a fixed-vocabulary sentence such as
+``burst of short-lived probe-like flows ($+4.0\sigma$); flow table filling
+faster than normal ($+3.2\sigma$).'' The cost is negligible and the output
+requires no model introspection.
+
+\subsection{Mitigation}
+Once an attack is confirmed, FLARE applies selective eviction with timeout
+hardening. Suspected low-rate flows, those with per-flow traffic intensity near
+the refresh floor $1/(T_{\mathrm{idle}}-\delta)$, are denied table residency,
+and the effective idle timeout of existing low-activity entries is reduced to
+$T_{\mathrm{idle}}/4$. Legitimate flows, which arrive with substantially higher
+packet rates, are unaffected. Section~\ref{sec:results} quantifies the effect.
+
+%==============================================================================
+\section{Experimental Setup}\label{sec:setup}
+%==============================================================================
+We evaluate FLARE in a packet-level simulation of an OpenFlow-style switch,
+implemented so that the entire study reproduces on a free cloud notebook
+without specialized hardware; software switch models of this kind are standard
+practice for SDN experimentation~\cite{lantz2010mininet}. The flow-table
+semantics (install on first packet, refresh on match, evict on idle timeout,
+reject when full) are modeled exactly.
+
+\begin{table}[t]
+\caption{Simulation and detector parameters.}
+\label{tab:params}
+\centering
+\small
+\begin{tabular}{@{}llr@{}}
+\toprule
+ & Parameter & Value \\
+\midrule
+Switch & table capacity $C$ & 12000 entries \\
+ & idle timeout $T_{\mathrm{idle}}$ & 10\,s \\
+Traffic & benign flow arrival rate & 208 flows/s \\
+ & mean benign flow lifetime & 8\,s \\
+ & benign in-flow packet rate & 3 pkt/s \\
+Attack & probing window & 200--240\,s \\
+ & probe rate & 112 flows/s \\
+ & installation start & 240\,s \\
+ & malicious flow rate $\lambda_a$ & 58--86 flows/s \\
+ & refresh margin $\delta$ & 1\,s \\
+Detector & window $\Delta$ / warm-up $W$ & 1\,s / 30 \\
+ & smoothing $\alpha$ & 0.02 \\
+ & churn threshold $\tau$ / probe $\tau_p$ & 3.0 / 2.8 \\
+ & CUSUM $k$, $h$ & 1, 9 \\
+ & persistence $\kappa$-of-$n$ & 3-of-5 \\
+Forecast & $W_r$, $\beta_{\min}$, $\rho_{\min}$, $m$ & 20, 3, 0.7, 10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:params} lists the configuration. Each simulation covers 600\,s.
+Benign flows arrive as a Poisson process with exponential lifetimes, and a
+configurable fraction are one- to two-packet ``blips'' that emulate DNS lookups
+and scans. The attack follows the two-phase model of
+Section~\ref{sec:threat}. Ground truth labels every window as benign, probing,
+or attack, and the \emph{overflow instant} is defined as the first window in
+which occupancy reaches 98\% of $C$, the point at which legitimate
+installations begin to fail in practice.
+
+\subsubsection{Baseline} We compare against a reactive occupancy-threshold
+detector that alarms when $o_t / C \ge 0.8$, which captures the operating
+principle of table-state monitors such as FloRa~\cite{flora2024}.
+
+\subsubsection{Metrics} For each method we report several quantities: the time of its first alarm; the
+\emph{lead before overflow}, defined as the overflow instant minus that first
+alarm; the lead it gains over the baseline; the false-positive rate, taken as
+the fraction of windows flagged on attack-free runs; and the absolute forecast
+error. We evaluate that last one at the moment occupancy first crosses 60\% of
+$C$, since that is when an operator would actually turn to the forecast.
+
+\subsubsection{Reproducibility} All randomness derives from a single seed per
+run. The headline scenario uses seed 7; robustness results aggregate seeds
+1--20. The code, dataset generator, and notebook are available in the project
+repository.\footnote{\url{https://github.com/prakhar443/project_FLARE}}
+
+%==============================================================================
+\section{Results}\label{sec:results}
+%==============================================================================
+
+\subsection{The Attack Succeeds Against an Undefended Switch}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{01_attack_no_defense.png}
+\caption{Flow-table occupancy under a LOFT attack with no defense. The probing
+phase (200--240\,s) barely perturbs occupancy; the installation phase fills the
+table until overflow at 351\,s.}
+\label{fig:attack}
+\end{figure}
+
+Fig.~\ref{fig:attack} shows the headline scenario. Benign traffic settles at a
+steady occupancy near 3500 of 12000 entries. Probing at 200\,s produces only a
+slight, transient rise, exactly the stealth the attacker intends. From 240\,s
+the installation phase accumulates entries monotonically, and the table is
+effectively full at $t = 351$\,s, after which overflow drops of legitimate
+installations are sustained. Total attack bandwidth remains under one percent
+of link traffic throughout, confirming that volumetric defenses have nothing to
+observe.
+
+\subsection{Detection Lead Time}
+
+\begin{table}[t]
+\caption{Detection results for the headline scenario (overflow occurs at 351\,s).}
+\label{tab:headline}
+\centering
+\small
+\resizebox{\dimexpr\columnwidth-1cm\relax}{!}{%
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & First alarm & Lead before & Flags \\
+ & (s) & overflow (s) & probing \\
+\midrule
+Occupancy baseline (FloRa-style) & 324 & 27 & no \\
+FLARE, core detector & 203 & 148 & no \\
+FLARE, early warning & 203 & 148 & yes \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[t]
+\centering \includegraphics[width=\linewidth]{02_detection_timeline.png}
+\caption{Detection timeline. Top: occupancy, marked with each method's
+first-alarm instant. Bottom: the FLARE anomaly score, flat under benign traffic
+and crossing the threshold as probing begins.}
+\label{fig:timeline}
+\end{figure}
+
+Table~\ref{tab:headline} and Fig.~\ref{fig:timeline} bring together the
+detection results for the headline scenario. The reactive baseline holds off
+until 324\,s---a mere 27\,s before the table overflows. FLARE behaves very
+differently. Its early-warning module fires at 203\,s, just three seconds into
+the probing phase and a full 121\,s ahead of the baseline, while the core
+detector confirms at 203\,s by combining churn deviations with CUSUM drift. The
+lower panel of Fig.~\ref{fig:timeline} makes the mechanism visible: under benign
+load the anomaly score hovers near 1, then climbs past $\tau = 3$ within seconds
+of the first probe. Because the freeze-on-alarm rule stops the growing attack
+from quietly re-normalizing the baseline, the score stays high right through the
+installation phase instead of decaying as the attack drags on.
+
+\subsection{Forecasting the Overflow Instant}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{03_forecast.png}
+\caption{Time-to-overflow forecast. After the gate of~\eqref{eq:gate} opens, the
+predicted overflow instant tracks the true value (351\,s), staying within
+roughly $\pm20$\,s and converging as overflow approaches.}
+\label{fig:forecast}
+\end{figure}
+
+Fig.~\ref{fig:forecast} compares the forecast we publish against the actual
+overflow instant. Throughout the benign period the gate of~\eqref{eq:gate} keeps
+the forecaster quiet---a sensible choice, since naively extrapolating the
+flat-but-noisy occupancy there would produce predictions that swing by thousands
+of seconds. The gate opens soon after installation starts, and from then on the
+predicted overflow time tracks the truth to within roughly $\pm20$\,s,
+tightening as overflow draws near. At the 60\%-occupancy checkpoint---the point
+an operator would act on---the forecast error is just 0.7\,s on the headline
+run, with a median of 2\,s across seeds. Put in
+operational terms: an operator alerted at 203\,s receives not just an alarm but
+a believable deadline still more than two minutes out.
+
+\subsection{Robustness Across Runs}
+
+\begin{table}[t]
+\caption{Aggregate results across 20 independently seeded runs.}
+\label{tab:robust}
+\centering
+\small
+\begin{tabular}{@{}lc@{}}
+\toprule
+Metric & Value \\
+\midrule
+Attack detection rate (core) & 20/20 \\
+Probing detected by early warning & 20/20 \\
+Runs where FLARE precedes baseline & 20/20 \\
+Median lead before overflow, FLARE & 152\,s \\
+Median lead before overflow, baseline & 30\,s \\
+Median lead over baseline & 122\,s \\
+Median (max) forecast error & 2\,s (12\,s) \\
+False-positive rate, FLARE & 0\,\% \\
+False-positive rate, early warning & 0\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+To make sure a single lucky seed isn't driving the result, we rerun the
+experiment across seeds 1--20, cycling the attack rate through 58, 72, and 86
+flows/s. Table~\ref{tab:robust} collects the outcome. Both FLARE detectors fire
+on every run, FLARE beats the baseline on every run, and its median lead before
+overflow is five times that of the baseline. Across the attack-free runs---more
+than 1700 post-warm-up windows per detector---the false-positive rate is zero
+for every method. We put this down to the persistence rule, which soaks up the
+isolated deviations thrown off by benign Poisson churn.
+
+\subsection{Mitigation}
+
+\begin{figure}[t]
+\centering \includegraphics[width=\linewidth]{04_mitigation.png}
+\caption{Occupancy with and without mitigation. Selective eviction plus timeout
+hardening, triggered at FLARE's detection instant (203\,s), keeps the table well
+below capacity for the rest of the run.}
+\label{fig:mitigation}
+\end{figure}
+
+Fig.~\ref{fig:mitigation} replays the headline scenario, this time with the
+mitigation policy from Section~\ref{sec:design} switched on at FLARE's first
+alarm. Refusing residency to flows sitting at the refresh floor and hardening
+the timeouts clears out the malicious state within seconds: occupancy falls to
+around 2000 entries and stays bounded there, and no benign installations are lost
+to overflow for the rest of the run. For contrast, we overlay the undefended
+trace from Fig.~\ref{fig:attack}.
+
+\subsection{Overhead}
+Each module does a constant amount of work per feature per window: the updates
+in~\eqref{eq:ewma-mean}--\eqref{eq:cusum} come down to a few arithmetic
+operations, and the forecaster's least-squares fit over $W_r = 20$ points costs
+almost nothing. The whole stack gets through a 600-window run in well under a
+second on a single commodity core, so running it alongside a production
+controller adds no load worth measuring.
+
+%==============================================================================
+\section{Discussion and Limitations}\label{sec:discussion}
+%==============================================================================
+\subsubsection{Why CUSUM} Against low-rate attacks, any per-window
+score---however carefully normalized---runs into a bind: an adaptive baseline
+quietly absorbs slow drift, whereas a static one piles up false positives as
+benign traffic shifts over time. The CUSUM statistic of~\eqref{eq:cusum}
+sidesteps the dilemma by accumulating small excesses, and its optimality for
+detecting persistent small shifts is a classical result~\cite{page1954cusum}.
+The two signals are complementary across table scales. On a smaller
+1500-entry table, where per-window counts are an order of magnitude lower and
+the churn signal-to-noise ratio is correspondingly weaker, the churn score
+alone missed the installation phase in all 10 seeds, whereas restoring the
+CUSUM term recovered detection in every one. On the larger table evaluated
+here the higher counts make the churn score reliable on its own, yet the CUSUM
+term still supplies the earliest and most interpretable drift evidence and
+remains the decisive signal against the slowest campaigns.
+
+\subsubsection{Evasion} An attacker who knows about FLARE could throttle the
+probing to stay under $\tau_p$, but the occupancy gate in~\eqref{eq:probe}
+leaves no room to game it: a successful overflow has to move occupancy sooner or
+later, and once it does the CUSUM term integrates that growth no matter how
+gradually it accrues. Drawing the campaign out also widens the attacker's
+exposure window and gives the operator more time to respond---exactly the
+trade-off a defender wants to force.
+
+\subsubsection{Scope} Our evaluation rests on a software model of a single
+switch. The upside is that every result reproduces on a free cloud notebook and
+the flow-table semantics are captured exactly; the downside is that hardware
+effects such as TCAM update latency and controller scheduling jitter are left
+out. Validating FLARE on a Mininet or P4 testbed is the obvious next
+step~\cite{lantz2010mininet}. Pushing detection across several switches, where a
+distributed attacker spreads its budget thin, will probably mean correlating
+FLARE instances at the controller---something the per-window feature interface
+already accommodates.
+
+%==============================================================================
+\section{Conclusion}\label{sec:conclusion}
+%==============================================================================
+Low-rate flow-table overflow attacks get through because they stay below the
+sensitivity of volumetric defenses and ahead of reactive table monitors. FLARE
+shuts both doors. By picking up on the reconnaissance that precedes
+installation, folding slow drift into a CUSUM statistic built on adaptively
+learned baselines, and turning detection into an explained, forecast deadline,
+it converts a last-second alarm into minutes of usable warning: a median of
+152\,s before overflow against 30\,s for a reactive baseline, no false positives
+across any run, and a median forecast error of 2\,s. The framework, the
+dataset, and a notebook that regenerates every figure are all public, and we
+hope they serve as a starting point for future work on anticipatory SDN defense.
+
+%==============================================================================
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
